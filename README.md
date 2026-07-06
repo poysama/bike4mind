@@ -95,3 +95,5 @@ For alternative licensing, contact **licensing@bike4mind.com**.
 </a>
 
 © 2026 Bike4Mind, Inc.
+
+<!-- fork preview path verification (internal deployer test) -->
