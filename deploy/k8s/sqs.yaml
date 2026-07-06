@@ -1,0 +1,55 @@
+# SQS-compatible queue (ElasticMQ). Queues are predeclared in elasticmq.conf,
+# supplied via the `elasticmq-config` ConfigMap (created from the repo-root
+# elasticmq.conf — see README). The queue URLs there match the *_QUEUE URLs in
+# .env.selfhost (http://sqs:9324/000000000000/<name>).
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqs
+  labels:
+    app: sqs
+spec:
+  selector:
+    app: sqs
+  ports:
+    - name: sqs
+      port: 9324
+      targetPort: 9324
+    - name: ui
+      port: 9325
+      targetPort: 9325
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sqs
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sqs
+  template:
+    metadata:
+      labels:
+        app: sqs
+    spec:
+      containers:
+        - name: sqs
+          image: softwaremill/elasticmq-native
+          ports:
+            - containerPort: 9324
+            - containerPort: 9325
+          volumeMounts:
+            - name: elasticmq-config
+              mountPath: /opt/elasticmq.conf
+              subPath: elasticmq.conf
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 9324
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: elasticmq-config
+          configMap:
+            name: elasticmq-config

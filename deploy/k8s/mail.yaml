@@ -1,0 +1,47 @@
+# Local mail catcher (Mailpit): all outgoing mail (including sign-in codes)
+# lands here. The app sends SMTP to the `mail` Service on 1025
+# (MAIL_HOST=mail, MAIL_PORT=1025 in .env.selfhost). Read caught mail in the
+# web UI on 8025 (port-forward — see README). Point MAIL_* at a real SMTP
+# provider instead for anything beyond local use.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mail
+  labels:
+    app: mail
+spec:
+  selector:
+    app: mail
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+    - name: ui
+      port: 8025
+      targetPort: 8025
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mail
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mail
+  template:
+    metadata:
+      labels:
+        app: mail
+    spec:
+      containers:
+        - name: mail
+          image: axllent/mailpit
+          ports:
+            - containerPort: 1025
+            - containerPort: 8025
+          readinessProbe:
+            tcpSocket:
+              port: 8025
+            initialDelaySeconds: 5
+            periodSeconds: 10

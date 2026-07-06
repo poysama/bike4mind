@@ -1,0 +1,70 @@
+# The Bike4Mind app. Pulls the CI-published multi-arch image
+# (linux/amd64 + linux/arm64), public — no imagePullSecret needed. All config
+# comes from the b4m-env Secret (created from .env.selfhost, see README).
+#
+# SINGLE REPLICA ONLY (replicas: 1). This is the tested path. The self-host
+# build has single-node assumptions that make it unsafe to scale out today:
+#   - In-memory rate limits are per-pod (each replica counts independently).
+#   - Quest/background processing runs in-process on the pod that accepts the
+#     request; there is no shared work queue dispatch across replicas yet.
+#   - The realtime websocket gateway is not in this stack, so live streaming
+#     updates degrade (chat replies appear on refresh).
+# Horizontal scale waits on the websocket/fanout milestone (tracked upstream).
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  labels:
+    app: app
+spec:
+  selector:
+    app: app
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: app
+  template:
+    metadata:
+      labels:
+        app: app
+    spec:
+      # Wait for the Mongo replica set to elect a primary before starting the
+      # app (mirrors compose `depends_on: mongo: condition: service_healthy`,
+      # which only reports healthy once rs.initiate has run).
+      initContainers:
+        - name: wait-for-mongo-primary
+          image: mongo:7
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mongosh --host mongo:27017 --quiet --eval 'rs.status().myState' 2>/dev/null | grep -q '^1$'; do
+                echo "waiting for mongo replica set primary..."; sleep 3;
+              done
+              echo "mongo primary ready"
+      containers:
+        - name: app
+          image: ghcr.io/bike4mind/bike4mind-selfhost:latest
+          envFrom:
+            - secretRef:
+                name: b4m-env
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12

@@ -1,0 +1,100 @@
+# S3-compatible object storage. The app uses the AWS S3 SDK pointed at the
+# `minio` Service (AWS_ENDPOINT_URL_S3=http://minio:9000 in .env.selfhost).
+# Root credentials come from the b4m-env Secret (created from .env.selfhost).
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  labels:
+    app: minio
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: minio/minio
+          args: ['server', '/data', '--console-address', ':9001']
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: b4m-env
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: b4m-env
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 5Gi
+---
+# One-shot: create the buckets the app expects (names come from the b4m-env
+# Secret). Idempotent — `mc mb -p` on an existing bucket is a no-op. Same mc
+# commands as the compose `createbuckets` service.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-createbuckets
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: createbuckets
+          image: minio/mc
+          envFrom:
+            - secretRef:
+                name: b4m-env
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio..."; sleep 3;
+              done
+              for b in "$APP_FILES_BUCKET" "$EMAIL_INGESTION_BUCKET" "$FAB_FILE_BUCKET" "$GENERATED_IMAGES_BUCKET" "$HISTORY_IMPORT_BUCKET" "$PUBLISHED_ARTIFACTS_BUCKET" "$SLACK_EXPORT_BUCKET"; do
+                [ -n "$b" ] && mc mb -p "local/$b" || true;
+              done
+              echo "buckets ready"

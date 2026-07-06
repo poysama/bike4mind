@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Everything lands in the bike4mind namespace. The b4m-env Secret and the
+# elasticmq-config ConfigMap are created imperatively from the repo-root
+# .env.selfhost and elasticmq.conf (see README) so those files stay the single
+# source of truth — no secrets in git, no duplicated queue config.
+namespace: bike4mind
+
+resources:
+  - namespace.yaml
+  - mongo.yaml
+  - minio.yaml
+  - sqs.yaml
+  - mail.yaml
+  - app.yaml

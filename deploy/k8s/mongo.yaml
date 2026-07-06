@@ -1,0 +1,101 @@
+# MongoDB single-node replica set (the app requires a replica set for transactions).
+# Headless Service so the pod is reachable at the stable name `mongo` — the same
+# name the app uses in MONGODB_URI (mongodb://mongo:27017/...), so .env.selfhost
+# works unchanged. The mongo-rs-init Job runs rs.initiate once, mirroring the
+# rs.initiate the compose stack does inside its healthcheck.
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels:
+    app: mongo
+spec:
+  clusterIP: None
+  selector:
+    app: mongo
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+          # MongoDB/WiredTiger opens a file per collection + index and fatally
+          # panics with a WiredTiger "Too many open files" (EMFILE) error if the
+          # soft nofile limit is below its documented minimum (64000). The compose
+          # stack raises this via `ulimits`. Kubernetes has no pod-level nofile
+          # knob, so the limit is inherited from the container runtime. On most
+          # runtimes (containerd/CRI-O) the default is already high (>= 1M). If you
+          # see WiredTiger EMFILE on your platform, raise LimitNOFILE on the
+          # container runtime (e.g. containerd's systemd unit) — see README.
+          readinessProbe:
+            exec:
+              command:
+                - mongosh
+                - --quiet
+                - --eval
+                - "db.adminCommand('ping').ok"
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        resources:
+          requests:
+            storage: 5Gi
+---
+# One-shot: initiate the single-node replica set. Idempotent — if rs0 is already
+# up it exits cleanly. Uses host `mongo:27017` as the member so the address the
+# replica-set config advertises matches the address the app connects to.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-rs-init
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: rs-init
+          image: mongo:7
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mongosh --host mongo:27017 --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do
+                echo "waiting for mongo to accept connections..."; sleep 3;
+              done
+              mongosh --host mongo:27017 --quiet --eval '
+                try {
+                  if (rs.status().ok) { print("replica set already initiated"); quit(0); }
+                } catch (e) {
+                  print("initiating replica set rs0...");
+                  rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
+                  print("replica set initiated");
+                }'
