@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mail
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+    {{- include "bike4mind.selectorLabels" "mail" | nindent 4 }}
+spec:
+  selector:
+    {{- include "bike4mind.selectorLabels" "mail" | nindent 4 }}
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: 1025
+    - name: ui
+      port: 8025
+      targetPort: 8025
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mail
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bike4mind.selectorLabels" "mail" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "mail" | nindent 8 }}
+    spec:
+      containers:
+        - name: mail
+          image: {{ .Values.mail.image | quote }}
+          ports:
+            - containerPort: 1025
+            - containerPort: 8025
+          readinessProbe:
+            tcpSocket:
+              port: 8025
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.mail.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

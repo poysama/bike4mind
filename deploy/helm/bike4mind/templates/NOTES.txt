@@ -1,0 +1,27 @@
+Bike4Mind has been deployed to namespace "{{ .Release.Namespace }}" as release "{{ .Release.Name }}".
+
+The backing services (mongo, minio, sqs, mail) start first, then two one-shot
+post-install hook Jobs run: mongo-rs-init (initiates the replica set) and
+minio-createbuckets. The app's init container waits for the Mongo primary before
+starting, so give it a minute on first install.
+
+Watch it come up:
+  kubectl -n {{ .Release.Namespace }} get pods -w
+
+Reach the app (only the app Service is meant to be exposed):
+{{- if .Values.app.ingress.enabled }}
+  Ingress is enabled at: http{{ if .Values.app.ingress.tls }}s{{ end }}://{{ .Values.app.ingress.host }}
+{{- else }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/app {{ .Values.app.service.port }}:{{ .Values.app.service.port }}
+  # then open http://localhost:{{ .Values.app.service.port }}
+{{- end }}
+
+Read sign-in codes from Mailpit:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/mail 8025:8025
+  # then open http://localhost:8025
+
+The first account to sign up becomes the admin.
+
+NOTE: do not pass --wait to `helm install`. The init Jobs are post-install hooks,
+and the app waits on them, so --wait would time out. A plain `helm install` is
+correct; the app becomes ready on its own once the replica set is up.

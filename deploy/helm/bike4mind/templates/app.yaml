@@ -1,0 +1,98 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+    {{- include "bike4mind.selectorLabels" "app" | nindent 4 }}
+spec:
+  type: {{ .Values.app.service.type }}
+  selector:
+    {{- include "bike4mind.selectorLabels" "app" | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.app.service.port }}
+      targetPort: 3000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+spec:
+  # SINGLE REPLICA ONLY — see values.yaml. Not safe to scale out yet.
+  replicas: {{ .Values.app.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "bike4mind.selectorLabels" "app" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "app" | nindent 8 }}
+    spec:
+      # Wait for the Mongo replica set to elect a primary before starting.
+      initContainers:
+        - name: wait-for-mongo-primary
+          image: {{ .Values.mongo.image | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mongosh --host mongo:27017 --quiet --eval 'rs.status().myState' 2>/dev/null | grep -q '^1$'; do
+                echo "waiting for mongo replica set primary..."; sleep 3;
+              done
+              echo "mongo primary ready"
+      containers:
+        - name: app
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+          imagePullPolicy: {{ .Values.app.image.pullPolicy }}
+          envFrom:
+            - secretRef:
+                name: {{ .Values.envSecretName | quote }}
+          ports:
+            - containerPort: 3000
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          {{- with .Values.app.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+{{- if .Values.app.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+  {{- with .Values.app.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.app.ingress.className }}
+  ingressClassName: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.app.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.app.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: app
+                port:
+                  number: {{ .Values.app.service.port }}
+{{- end }}

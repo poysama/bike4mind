@@ -1,0 +1,104 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+    {{- include "bike4mind.selectorLabels" "mongo" | nindent 4 }}
+spec:
+  clusterIP: None
+  selector:
+    {{- include "bike4mind.selectorLabels" "mongo" | nindent 4 }}
+  ports:
+    - name: mongo
+      port: 27017
+      targetPort: 27017
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+spec:
+  serviceName: mongo
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bike4mind.selectorLabels" "mongo" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "mongo" | nindent 8 }}
+    spec:
+      containers:
+        - name: mongo
+          image: {{ .Values.mongo.image | quote }}
+          command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
+          ports:
+            - containerPort: 27017
+          volumeMounts:
+            - name: mongo-data
+              mountPath: /data/db
+          # Kubernetes has no pod-level nofile knob; WiredTiger needs >= 64000.
+          # The common runtimes already default far above that. See chart README.
+          readinessProbe:
+            exec:
+              command: ['mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+          {{- with .Values.mongo.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: mongo-data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        {{- with .Values.mongo.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.mongo.storage | quote }}
+---
+# One-shot: initiate the single-node replica set (idempotent). helm hook so it
+# runs on install/upgrade and is cleaned up before the next run.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mongo-rs-init
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "mongo-rs-init" | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: rs-init
+          image: {{ .Values.mongo.image | quote }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mongosh --host mongo:27017 --quiet --eval 'db.adminCommand("ping").ok' >/dev/null 2>&1; do
+                echo "waiting for mongo to accept connections..."; sleep 3;
+              done
+              mongosh --host mongo:27017 --quiet --eval '
+                try {
+                  if (rs.status().ok) { print("replica set already initiated"); quit(0); }
+                } catch (e) {
+                  print("initiating replica set rs0...");
+                  rs.initiate({_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]});
+                  print("replica set initiated");
+                }'

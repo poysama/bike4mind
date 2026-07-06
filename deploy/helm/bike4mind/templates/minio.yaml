@@ -1,0 +1,122 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+    {{- include "bike4mind.selectorLabels" "minio" | nindent 4 }}
+spec:
+  selector:
+    {{- include "bike4mind.selectorLabels" "minio" | nindent 4 }}
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+    - name: console
+      port: 9001
+      targetPort: 9001
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: minio
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+spec:
+  serviceName: minio
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bike4mind.selectorLabels" "minio" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "minio" | nindent 8 }}
+    spec:
+      containers:
+        - name: minio
+          image: {{ .Values.minio.image | quote }}
+          args: ['server', '/data', '--console-address', ':9001']
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName | quote }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName | quote }}
+                  key: MINIO_ROOT_PASSWORD
+          ports:
+            - containerPort: 9000
+            - containerPort: 9001
+          volumeMounts:
+            - name: minio-data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: 9000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.minio.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+  volumeClaimTemplates:
+    - metadata:
+        name: minio-data
+      spec:
+        accessModes: ['ReadWriteOnce']
+        {{- with .Values.minio.storageClassName }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.minio.storage | quote }}
+---
+# One-shot: create the app's buckets (idempotent). helm hook, self-waits for MinIO.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-createbuckets
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "minio-createbuckets" | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: createbuckets
+          image: {{ .Values.minio.mcImage | quote }}
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName | quote }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.envSecretName | quote }}
+                  key: MINIO_ROOT_PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+                echo "waiting for minio..."; sleep 3;
+              done
+              {{- range .Values.minio.buckets }}
+              mc mb -p {{ printf "local/%s" . | quote }} || true
+              {{- end }}
+              echo "buckets ready"

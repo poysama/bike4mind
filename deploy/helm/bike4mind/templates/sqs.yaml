@@ -1,0 +1,68 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: elasticmq-config
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+data:
+  elasticmq.conf: |-
+{{ .Files.Get "files/elasticmq.conf" | indent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sqs
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+    {{- include "bike4mind.selectorLabels" "sqs" | nindent 4 }}
+spec:
+  selector:
+    {{- include "bike4mind.selectorLabels" "sqs" | nindent 4 }}
+  ports:
+    - name: sqs
+      port: 9324
+      targetPort: 9324
+    - name: ui
+      port: 9325
+      targetPort: 9325
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sqs
+  labels:
+    {{- include "bike4mind.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "bike4mind.selectorLabels" "sqs" | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "bike4mind.selectorLabels" "sqs" | nindent 8 }}
+    spec:
+      containers:
+        - name: sqs
+          image: {{ .Values.sqs.image | quote }}
+          ports:
+            - containerPort: 9324
+            - containerPort: 9325
+          volumeMounts:
+            - name: elasticmq-config
+              mountPath: /opt/elasticmq.conf
+              subPath: elasticmq.conf
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 9324
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          {{- with .Values.sqs.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      volumes:
+        - name: elasticmq-config
+          configMap:
+            name: elasticmq-config

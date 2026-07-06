@@ -1,0 +1,72 @@
+# Default values for the bike4mind chart.
+# This chart mirrors compose.selfhost.yaml / deploy/k8s: the app plus MongoDB,
+# MinIO, ElasticMQ, and Mailpit. Service names are fixed to the compose names
+# (mongo, minio, sqs, mail) so the values in your .env.selfhost resolve
+# unchanged inside the release namespace.
+
+# --- App config Secret -------------------------------------------------------
+# All app env vars come from a Secret built from your .env.selfhost. Because it
+# holds real secrets it is NOT created by this chart. Create it once in the
+# release namespace before `helm install` (see the chart README):
+#   kubectl -n <ns> create secret generic b4m-env --from-env-file=.env.selfhost
+# and set its name here. MINIO_ROOT_USER / MINIO_ROOT_PASSWORD are read from the
+# same Secret so MinIO and the app agree on credentials.
+envSecretName: b4m-env
+
+# --- App ---------------------------------------------------------------------
+app:
+  image:
+    repository: ghcr.io/bike4mind/bike4mind-selfhost
+    tag: latest
+    pullPolicy: IfNotPresent
+  # SINGLE REPLICA ONLY. The self-host build has single-node assumptions
+  # (per-pod in-memory rate limits, in-process quest processing, no realtime
+  # websocket gateway). Do not raise this until horizontal scale lands upstream.
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 3000
+  resources: {}
+  # Ingress is off by default; port-forward svc/<release>-app for local use.
+  # For real traffic, enable this and terminate TLS at the ingress.
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    host: bike4mind.local
+    tls: []
+
+# --- MongoDB (single-node replica set rs0) -----------------------------------
+mongo:
+  image: mongo:7
+  storage: 5Gi
+  storageClassName: ""
+  resources: {}
+
+# --- MinIO (S3-compatible object storage) ------------------------------------
+minio:
+  image: minio/minio
+  mcImage: minio/mc
+  storage: 5Gi
+  storageClassName: ""
+  resources: {}
+  # Buckets created by the one-shot job. Keep in sync with the *_BUCKET vars in
+  # .env.selfhost (these are the defaults shipped in .env.selfhost.example).
+  buckets:
+    - b4m-app-files
+    - b4m-email-ingestion
+    - b4m-fab-file
+    - b4m-generated-images
+    - b4m-history-import
+    - b4m-published-artifacts
+    - b4m-slack-export
+
+# --- ElasticMQ (SQS-compatible queue) ----------------------------------------
+sqs:
+  image: softwaremill/elasticmq-native
+  resources: {}
+
+# --- Mailpit (local mail catcher) --------------------------------------------
+mail:
+  image: axllent/mailpit
+  resources: {}

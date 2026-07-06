@@ -1,0 +1,17 @@
+apiVersion: v2
+name: bike4mind
+description: The open core of Bike4Mind (app + MongoDB + MinIO + ElasticMQ + Mailpit) for self-hosting on Kubernetes.
+type: application
+# Chart version. Bump on chart changes.
+version: 0.1.0
+# Tracks the app image tag this chart defaults to (see values.image.tag).
+appVersion: "latest"
+home: https://github.com/bike4mind/bike4mind
+sources:
+  - https://github.com/bike4mind/bike4mind
+keywords:
+  - bike4mind
+  - self-host
+  - ai
+maintainers:
+  - name: Bike4Mind
